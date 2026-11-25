@@ -77,6 +77,7 @@ fun WattsScreen(vm: WattsViewModel) {
     val s by vm.sample.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
     val session by vm.session.collectAsStateWithLifecycle()
+    val consumption by vm.consumptionW.collectAsStateWithLifecycle()
     var settings by remember { mutableStateOf(false) }
 
     Column(
@@ -92,7 +93,7 @@ fun WattsScreen(vm: WattsViewModel) {
         if (sample == null) {
             Text("Lendo a bateria…", color = C.Muted)
         } else {
-            Hero(sample)
+            Hero(sample, consumption, vm.chargerWatts(sample.watts))
             Chart(history)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Tile("Bateria", "${sample.level}%", Modifier.weight(1f))
@@ -126,8 +127,8 @@ fun WattsScreen(vm: WattsViewModel) {
                 Text("Este aparelho não informa a corrente da bateria, então os watts não podem ser calculados.", color = C.Amber, fontSize = 13.sp)
             }
             Text(
-                "Mostra a energia que entra na bateria. Com a tela ligada, parte da energia do carregador vai para o próprio celular, " +
-                    "então o valor fica abaixo do que o carregador fornece. Perto de 80–100% a carga diminui de propósito.",
+                "O Android mede só a bateria. Fora da tomada, isso é o consumo exato do celular. Na tomada, o app soma o que entra na bateria " +
+                    "com o último consumo medido para estimar o total do carregador (≈). Perto de 80–100% a carga diminui de propósito.",
                 color = C.Muted, fontSize = 12.sp, lineHeight = 17.sp,
             )
         }
@@ -137,26 +138,64 @@ fun WattsScreen(vm: WattsViewModel) {
 }
 
 @Composable
-private fun Hero(s: BatterySample) {
+private fun BigWatts(label: String, value: String, color: Color) {
+    Column {
+        Text(label, color = C.Muted, fontSize = 14.sp)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(value, fontSize = 64.sp, fontWeight = FontWeight.Bold, color = color, letterSpacing = (-2).sp)
+            Text("W", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = C.Muted, modifier = Modifier.padding(start = 6.dp, bottom = 12.dp))
+        }
+    }
+}
+
+@Composable
+private fun Flow(label: String, value: String, color: Color, hint: String, modifier: Modifier) {
+    Column(modifier.background(C.Surface, RoundedCornerShape(16.dp)).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).background(color, CircleShape))
+            Text(label, fontSize = 12.sp, color = C.Muted, modifier = Modifier.padding(start = 6.dp))
+        }
+        Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = color, modifier = Modifier.padding(top = 4.dp))
+        Text(hint, fontSize = 11.sp, color = C.Muted)
+    }
+}
+
+/**
+ * Separa as três coisas: o que o carregador entrega, o que vai para a bateria e o que o celular gasta.
+ * Na tomada, o consumo do celular é estimado (o Android só mede a bateria).
+ */
+@Composable
+private fun Hero(s: BatterySample, consumption: Double?, charger: Double?) {
+    val plugged = s.source != "Desconectado"
     val (label, color) = when (s.state) {
-        ChargeState.CHARGING -> "Carregando" to C.Green
-        ChargeState.FULL -> "Carga completa" to C.Green
+        ChargeState.CHARGING -> "Carregando · ${s.source}" to C.Green
+        ChargeState.FULL -> "Carga completa · ${s.source}" to C.Green
         ChargeState.NOT_CHARGING -> "Conectado, sem carregar" to C.Amber
-        ChargeState.DISCHARGING -> "Na bateria" to C.Muted
+        ChargeState.DISCHARGING -> if (plugged) "Conectado, mas descarregando" to C.Amber else "Na bateria" to C.Muted
         ChargeState.UNKNOWN -> "Desconhecido" to C.Muted
     }
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(8.dp).background(color, CircleShape))
             Text(label, color = color, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, modifier = Modifier.padding(start = 8.dp))
         }
-        Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 6.dp)) {
-            Text(f(abs(s.watts), 1), fontSize = 72.sp, fontWeight = FontWeight.Bold, color = C.Text, letterSpacing = (-2).sp)
-            Text("W", fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = C.Muted, modifier = Modifier.padding(start = 6.dp, bottom = 14.dp))
+        if (plugged) {
+            BigWatts("Carregador entregando", charger?.let { "≈" + f(it, 1) } ?: "—", C.Text)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Flow("Indo para a bateria", f(maxOf(0.0, s.watts), 1) + " W", C.Green, "medido", Modifier.weight(1f))
+                Flow("Celular gastando", consumption?.let { "≈" + f(it, 1) + " W" } ?: "—", C.Red, if (consumption != null) "estimado" else "sem medição ainda", Modifier.weight(1f))
+            }
+            if (consumption == null) Text(
+                "Para estimar o consumo do celular (e o total do carregador), tire da tomada por cerca de 1 minuto com o app aberto.",
+                color = C.Amber, fontSize = 12.sp, lineHeight = 17.sp,
+            )
+        } else {
+            BigWatts("Celular gastando", f(abs(s.watts), 1), C.Red)
+            Flow("Carregador", "Desconectado", C.Muted, "conecte para ver quanto ele entrega", Modifier.fillMaxWidth())
         }
         Text(
-            (if (s.watts < 0) "saindo · " else "") + f(s.milliVolts / 1000.0, 2) + " V × " + f(abs(s.microAmps) / 1_000_000.0, 2) + " A",
-            color = C.Muted, fontSize = 15.sp,
+            f(s.milliVolts / 1000.0, 2) + " V × " + f(abs(s.microAmps) / 1_000_000.0, 2) + " A na bateria",
+            color = C.Muted, fontSize = 13.sp,
         )
     }
 }
@@ -166,7 +205,7 @@ private fun Chart(values: List<Double>) {
     val max = (values.maxOfOrNull { abs(it) } ?: 0.0).coerceAtLeast(5.0)
     Column(Modifier.fillMaxWidth().background(C.Surface, RoundedCornerShape(16.dp)).padding(16.dp)) {
         Row {
-            Text("Últimos 2 minutos", fontSize = 13.sp, color = C.Muted, modifier = Modifier.weight(1f))
+            Text(if ((values.lastOrNull() ?: 0.0) >= 0) "Bateria · entrando · 2 min" else "Bateria · saindo · 2 min", fontSize = 13.sp, color = C.Muted, modifier = Modifier.weight(1f))
             Text("máx. " + f(max, 0) + " W", fontSize = 13.sp, color = C.Muted)
         }
         Canvas(Modifier.fillMaxWidth().height(140.dp).padding(top = 12.dp)) {
@@ -183,8 +222,9 @@ private fun Chart(values: List<Double>) {
                 if (i == 0) line.moveTo(x, y) else line.lineTo(x, y)
             }
             val area = Path().apply { addPath(line); lineTo(w, h); lineTo(start, h); close() }
-            drawPath(area, Brush.verticalGradient(listOf(C.Accent.copy(alpha = 0.35f), Color.Transparent)))
-            drawPath(line, C.AccentText, style = Stroke(width = 5f))
+            val lineColor = if (values.last() >= 0) C.Green else C.Red
+            drawPath(area, Brush.verticalGradient(listOf(lineColor.copy(alpha = 0.30f), Color.Transparent)))
+            drawPath(line, lineColor, style = Stroke(width = 5f))
         }
     }
 }

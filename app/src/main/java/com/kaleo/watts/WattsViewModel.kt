@@ -20,6 +20,10 @@ class WattsViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("watts", Context.MODE_PRIVATE)
     private val reader = BatteryReader(app)
     private val stats = SessionStats()
+    private val estimator = ConsumptionEstimator(prefs.getFloat("consumo", -1f).takeIf { it > 0 }?.toDouble())
+
+    /** Consumo estimado do celular (medido fora da tomada). Null até ter uma medição. */
+    val consumptionW = MutableStateFlow(estimator.value)
     private var lastTime = 0L
 
     val unit = MutableStateFlow(runCatching { CurrentUnit.valueOf(prefs.getString("unit", "AUTO")!!) }.getOrDefault(CurrentUnit.AUTO))
@@ -40,10 +44,17 @@ class WattsViewModel(app: Application) : AndroidViewModel(app) {
             val dt = if (lastTime == 0L) 0.0 else (s.timeMs - lastTime) / 1000.0
             lastTime = s.timeMs
             if (s.state == ChargeState.CHARGING) stats.add(s.watts, dt)
+            if (s.state == ChargeState.DISCHARGING && s.currentSupported) {
+                estimator.addDischarge(s.watts)
+                consumptionW.value = estimator.value
+                estimator.value?.let { prefs.edit().putFloat("consumo", it.toFloat()).apply() }
+            }
             session.value = Session(stats.peakW, stats.averageW, stats.energyWh, stats.seconds)
             history.value = (history.value + s.watts).takeLast(120)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(3000), null)
+
+    fun chargerWatts(batteryInW: Double): Double? = estimator.chargerWatts(batteryInW)
 
     fun resetSession() {
         stats.reset()

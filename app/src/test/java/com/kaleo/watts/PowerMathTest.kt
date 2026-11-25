@@ -37,3 +37,16 @@ class PowerMathTest {
         assertEquals(3601.0, s.seconds, 1e-9)
     }
 }
+
+class ConsumptionTest {
+    @Test fun estimatesAndAdds() {
+        val e = ConsumptionEstimator()
+        assertEquals(null, e.chargerWatts(10.0))
+        e.addDischarge(-4.0)
+        assertEquals(4.0, e.value!!, 1e-9)
+        repeat(100) { e.addDischarge(-2.0) }
+        assertEquals(2.0, e.value!!, 0.01)
+        assertEquals(12.0, e.chargerWatts(10.0)!!, 0.01)
+        assertEquals(2.0, e.chargerWatts(-1.0)!!, 0.01) // conectado mas sem carregar: só o celular
+    }
+}

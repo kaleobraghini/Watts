@@ -53,3 +53,23 @@ class SessionStats {
         peakW = 0.0; energyWh = 0.0; seconds = 0.0
     }
 }
+
+/**
+ * Estima quanto o celular gasta sozinho. O Android só mede a corrente da BATERIA:
+ * fora da tomada isso é exatamente o consumo; na tomada, o que vai para o celular não aparece.
+ * Então guardamos a média recente do consumo medido fora da tomada e usamos como estimativa.
+ */
+class ConsumptionEstimator(initial: Double? = null) {
+    var value: Double? = initial
+        private set
+
+    /** Registra uma leitura fora da tomada ([watts] negativo ou positivo, conta o módulo). */
+    fun addDischarge(watts: Double) {
+        val w = kotlin.math.abs(watts)
+        if (w <= 0.05 || w > 40) return
+        value = value?.let { it * 0.9 + w * 0.1 } ?: w
+    }
+
+    /** Potência que o carregador está entregando ≈ o que entra na bateria + o que o celular gasta. */
+    fun chargerWatts(batteryInW: Double): Double? = value?.let { maxOf(0.0, batteryInW) + it }
+}
